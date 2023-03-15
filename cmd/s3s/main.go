@@ -29,35 +29,47 @@ func main() {
 				Name:     "bucket",
 				Usage:    "the bucket with the object",
 				Aliases:  []string{"b"},
+				EnvVars:  []string{"S3S_BUCKET"},
 			},
 			&cli.StringFlag{
 				Required: true,
 				Name:     "key",
 				Usage:    "the key (path and filename) of the object",
 				Aliases:  []string{"k"},
+				EnvVars:  []string{"S3S_OBJECT_KEY"},
 			},
 			&cli.StringFlag{
-				Name:  "sql",
-				Usage: "the query to run",
-				Value: "SELECT * FROM S3Object",
+				Name:    "sql",
+				Usage:   "the query to run",
+				Value:   "SELECT * FROM S3Object",
+				EnvVars: []string{"S3S_QUERY"},
 			},
 			&cli.StringFlag{
 				Name:    "format",
 				Usage:   "the format used in object [auto|csv|json|parquet]",
 				Aliases: []string{"f"},
 				Value:   "auto",
+				EnvVars: []string{"S3S_FORMAT"},
 			},
 			&cli.StringFlag{
 				Name:    "compression",
 				Usage:   "the compression used in object [auto|none|gzip|bzip2]",
 				Aliases: []string{"c"},
 				Value:   "auto",
+				EnvVars: []string{"S3S_COMPRESSION"},
 			},
 			&cli.StringFlag{
 				Name:    "region",
 				Usage:   "the aws region",
 				Aliases: []string{"r"},
 				Value:   "us-east-1",
+				EnvVars: []string{"AWS_REGION", "AWS_DEFAULT_REGION", "S3S_AWS_REGION"},
+			},
+			&cli.IntFlag{
+				Name:    "retry",
+				Usage:   "how many times to retry on failure",
+				Value:   0,
+				EnvVars: []string{"S3S_RETRY_COUNT"},
 			},
 		},
 		Action: run,
@@ -89,7 +101,7 @@ func run(c *cli.Context) error {
 	var output *s3.SelectObjectContentOutput
 
 	// Get the first page of results for ListObjectsV2 for a bucket
-	err = retry(1, func() error {
+	err = retry(c.Int("retry"), func() error {
 		var err error
 		output, err = client.SelectObjectContent(ctx, &s3.SelectObjectContentInput{
 			Bucket:              aws.String(c.String("bucket")),

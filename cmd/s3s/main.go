@@ -7,6 +7,8 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -40,6 +42,18 @@ func main() {
 				Value: "SELECT * FROM S3Object",
 			},
 			&cli.StringFlag{
+				Name:    "format",
+				Usage:   "the format used in object [auto|csv|json|parquet]",
+				Aliases: []string{"f"},
+				Value:   "auto",
+			},
+			&cli.StringFlag{
+				Name:    "compression",
+				Usage:   "the compression used in object [auto|none|gzip|bzip2]",
+				Aliases: []string{"c"},
+				Value:   "auto",
+			},
+			&cli.StringFlag{
 				Name:    "region",
 				Usage:   "the aws region",
 				Aliases: []string{"r"},
@@ -58,6 +72,9 @@ func run(c *cli.Context) error {
 	ctx, cancel := context.WithCancel(c.Context)
 	defer cancel()
 
+	// make a logger
+	l := log.New(os.Stderr, "WARN", 0)
+
 	schan := make(chan os.Signal, 1)
 	signal.Notify(schan, os.Signal(syscall.SIGPIPE))
 
@@ -75,14 +92,11 @@ func run(c *cli.Context) error {
 	err = retry(1, func() error {
 		var err error
 		output, err = client.SelectObjectContent(ctx, &s3.SelectObjectContentInput{
-			Bucket:         aws.String(c.String("bucket")),
-			Key:            aws.String(c.String("key")),
-			Expression:     aws.String(c.String("sql")),
-			ExpressionType: types.ExpressionTypeSql,
-			InputSerialization: &types.InputSerialization{
-				CompressionType: types.CompressionTypeGzip,
-				JSON:            &types.JSONInput{Type: types.JSONTypeLines},
-			},
+			Bucket:              aws.String(c.String("bucket")),
+			Key:                 aws.String(c.String("key")),
+			Expression:          aws.String(c.String("sql")),
+			ExpressionType:      types.ExpressionTypeSql,
+			InputSerialization:  getInputSerialization(c, l),
 			OutputSerialization: &types.OutputSerialization{JSON: &types.JSONOutput{}},
 		})
 		return err
@@ -118,7 +132,7 @@ func run(c *cli.Context) error {
 				_ = v.Value // Value is types.StatsEvent
 
 			case *types.UnknownUnionMember:
-				fmt.Println("unknown tag:", v.Tag)
+				l.Println("unknown tag:", v.Tag)
 			}
 		}
 	}
@@ -134,4 +148,58 @@ func retry(times int, try func() error) error {
 		tried++
 	}
 	return err
+}
+
+func getInputSerialization(c *cli.Context, l *log.Logger) *types.InputSerialization {
+	ser := &types.InputSerialization{
+		CompressionType: getCompressionType(c, l),
+	}
+
+	flag := strings.ToLower(c.String("format"))
+	if flag == "auto" {
+		// parse the file extension and set based on that
+		flg := filepath.Ext(c.String("key"))
+		flag = strings.TrimLeft(strings.ToLower(flg), ".")
+		if flag == "gz" || flag == "gzip" || flag == "bz2" || flag == "bzip2" {
+			flag = strings.TrimLeft(strings.ToLower(filepath.Ext(strings.TrimRight(c.String("key"), flg))), ".")
+		}
+	}
+
+	switch flag {
+	case "csv":
+		ser.CSV = &types.CSVInput{FileHeaderInfo: types.FileHeaderInfoUse}
+	case "json":
+		ser.JSON = &types.JSONInput{Type: types.JSONTypeLines}
+	case "parquet":
+		ser.Parquet = &types.ParquetInput{}
+	default:
+		// default to json
+		l.Println("uknown file format, default is JSON")
+		ser.JSON = &types.JSONInput{Type: types.JSONTypeLines}
+	}
+
+	return ser
+}
+
+func getCompressionType(c *cli.Context, l *log.Logger) types.CompressionType {
+	flag := strings.ToLower(c.String("compression"))
+	if flag == "auto" {
+		// parse from file e
+		flag = strings.ToLower(filepath.Ext(c.String("key")))
+	}
+
+	switch strings.TrimLeft(flag, ".") {
+	case "bz2":
+		fallthrough
+	case "bzip2":
+		return types.CompressionTypeBzip2
+	case "gz":
+		fallthrough
+	case "gzip":
+		return types.CompressionTypeGzip
+	case "none":
+		fallthrough
+	default:
+		return types.CompressionTypeNone
+	}
 }

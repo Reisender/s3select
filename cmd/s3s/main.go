@@ -13,6 +13,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
@@ -71,6 +72,21 @@ func main() {
 				Value:   0,
 				EnvVars: []string{"S3S_RETRY_COUNT"},
 			},
+			&cli.StringFlag{
+				Name:    "endpoint",
+				Usage:   "the endpoint forthe s3 service",
+				EnvVars: []string{"S3S_ENDPOINT"},
+			},
+			&cli.StringFlag{
+				Name:    "endpoint-access-key",
+				Usage:   "the endpoint access_key for the s3 service",
+				EnvVars: []string{"S3S_ENDPOINT_ACCESS_KEY"},
+			},
+			&cli.StringFlag{
+				Name:    "endpoint-secret",
+				Usage:   "the endpoint secret for the s3 service",
+				EnvVars: []string{"S3S_ENDPOINT_SECRET"},
+			},
 		},
 		Action: run,
 	}
@@ -91,7 +107,7 @@ func run(c *cli.Context) error {
 	signal.Notify(schan, os.Signal(syscall.SIGPIPE))
 
 	// Load the Shared AWS Configuration (~/.aws/config)
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(c.String("region")))
+	cfg, err := getAWSConfig(c)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -148,6 +164,37 @@ func run(c *cli.Context) error {
 			}
 		}
 	}
+}
+
+func getAWSConfig(c *cli.Context) (aws.Config, error) {
+	ctx := c.Context
+	endpoint := c.String("endpoint")
+	accessKey := c.String("endpoint-access-key")
+	secret := c.String("endpoint-secret")
+
+	options := [](func(*config.LoadOptions) error){
+		config.WithRegion(c.String("region")),
+	}
+
+	// see if we are using a custom endpoint
+	if len(endpoint) > 0 {
+		staticResolver := aws.EndpointResolverFunc(func(service, region string) (aws.Endpoint, error) {
+			return aws.Endpoint{
+				PartitionID:       "aws",
+				URL:               endpoint, // or where ever you ran minio
+				SigningRegion:     region,
+				HostnameImmutable: true,
+			}, nil
+		})
+		options = append(options, config.WithEndpointResolver(staticResolver))
+
+		if len(accessKey) > 0 {
+			credsProvder := credentials.NewStaticCredentialsProvider(accessKey, secret, "")
+			options = append(options, config.WithCredentialsProvider(credsProvder))
+		}
+	}
+
+	return config.LoadDefaultConfig(ctx, options...)
 }
 
 func retry(times int, try func() error) error {
